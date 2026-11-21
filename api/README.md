@@ -1,45 +1,82 @@
-# Follow-me drone API (MVP scaffold)
+# api
 
-Implements the cloud API and safety layer from the feasibility study (prjM4).
-The control loop (vision, PID, drone link) runs on an edge laptop and is not in this scaffold yet.
+The Drone3POV REST API (FastAPI). Docs are served at `/doc/` and the OpenAPI spec at `/api/v1/openapi.json`.
 
-## What is here
+## Endpoints (v1)
 
-- `app/safety.py`: hard limits (distance 1.5–3 m, height band, speed cap, low-battery and ToF stop thresholds).
-- `app/session.py`: follow-session state machine (searching → locked → following ⇄ lost → landing → finished).
-- `app/drone.py`: `DroneAdapter` interface and a `SimulatedDrone` for development. Add one adapter per drone.
-- `app/main.py`: REST API v1 (start, read, stop follow sessions; drone status; emergency stop).
-- `tests/test_follow.py`: safety limits, state transitions, API behaviour.
+| Method | Path | Auth | Purpose |
+| --- | --- | --- | --- |
+| POST | `/api/v1/auth/register` | none | Create a user account (always role `user`) |
+| POST | `/api/v1/auth/login` | none | Check password, set JWT in an HttpOnly cookie |
+| POST | `/api/v1/auth/logout` | none | Clear the cookie |
+| GET | `/api/v1/users/me` | user | Email, role, API calls used, free-call warning |
+| POST | `/api/v1/vision/detect` | user | **AI:** find people in an uploaded photo (self-hosted YOLOv10n) |
+| POST | `/api/v1/follow-sessions` | user | Start a follow session |
+| GET | `/api/v1/follow-sessions/{session_id}` | owner or admin | Session state |
+| POST | `/api/v1/follow-sessions/{session_id}/stop` | owner or admin | Stop and land |
+| GET | `/api/v1/drone/status` | user | Battery, height, link |
+| POST | `/api/v1/drone/emergency-stop` | user | Stop the motors now |
+| GET | `/api/v1/admin/users` | admin | All users with total requests (Table B) |
+| GET | `/api/v1/admin/stats/endpoints` | admin | Requests per endpoint (Table A) |
 
-## Run
+Every counted response carries `X-Free-Calls-Used`, `X-Free-Calls-Limit` and `X-Free-Calls-Exceeded`. Auth endpoints, docs and CORS preflights are not counted. Service continues after the 20 free calls.
+
+## Self-hosted AI model
+
+- Model: [onnx-community/yolov10n](https://huggingface.co/onnx-community/yolov10n), COCO object detection, ONNX, 9.4 MB.
+- Downloaded by `scripts/download_model.py` into `api/models/yolov10n/onnx/model.onnx` and run with ONNX Runtime on the API server. No third-party AI API is used.
+- Bonus demonstration: rename or delete `model.onnx`, and `POST /api/v1/vision/detect` returns 503 at once. Put it back and it works again.
+- `api/models/` is git-ignored, so run the download script on every machine and in the host's build step.
+
+## Run locally
 
 From this `api/` folder, with the venv at the repo root:
 
 ```bash
 py -3.13 -m venv ..\.venv
 ..\.venv\Scripts\python.exe -m pip install -r requirements.txt
+..\.venv\Scripts\python.exe scripts\download_model.py
 ..\.venv\Scripts\python.exe -m pytest -q
-..\.venv\Scripts\python.exe -m uvicorn app.main:app --reload
 ```
 
-Set `FOLLOW_API_KEY` in the environment for anything beyond local development (default `dev-key`).
+Then start the server (PowerShell). Local HTTP needs `COOKIE_SECURE=false`, because browsers won't send a Secure cookie over plain HTTP:
 
-Python 3.14 alpha does not work with the current FastAPI/pydantic pins, so use 3.13.
+```bash
+$env:COOKIE_SECURE="false"; ..\.venv\Scripts\python.exe -m uvicorn app.main:app --reload
+```
 
-## DJI Mini 2 (target drone)
+The demo accounts `john@john.com` / `123` (user) and `admin@admin.com` / `111` (admin) are created on startup, with bcrypt-hashed passwords.
 
-- `app/mini2.py` calls an Android **bridge app** over HTTP. The bridge runs DJI's Mobile SDK on a phone paired with the Mini 2's RC and issues virtual-stick commands.
-- Select it with `DRONE=mini2` and `BRIDGE_URL=http://<phone-ip>:<port>`. Without these, the simulator is used.
-- The Mini 2 has **no forward obstacle sensor**. The TT's ToF stop does not apply, so telemetry reports `tof_mm = None`. Keep flights in the cleared, bounded area.
-- Weight is under 250 g, so no registration is required for indoor flight. The camera records 4K, which is better than the 720p the study assumed.
+## Environment variables
 
-Bridge endpoints the adapter expects: `POST /v1/connect`, `/v1/takeoff`, `/v1/land`, `/v1/emergency-stop`, `/v1/velocity` (`forward_mps`, `right_mps`, `up_mps`, `yaw_dps`), and `GET /v1/telemetry` (`battery_pct`, `height_m`, `link_ok`).
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `JWT_SECRET` | development value | **Set a long random value in production.** |
+| `DATABASE_URL` | SQLite file `api/drone3pov.db` | Use Postgres when hosted; `postgres://` URLs are accepted. |
+| `CLIENT_ORIGINS` | `http://localhost:5173` | Comma-separated client origins allowed by CORS. |
+| `COOKIE_SECURE` | `true` | `false` only for local HTTP. |
+| `COOKIE_SAMESITE` | `none` (or `lax` when not secure) | `none` is required when client and API are on different sites. |
+| `JWT_MINUTES` | `60` | Token and cookie lifetime. |
+| `FREE_CALLS` | `20` | |
+| `MODEL_PATH` | `api/models/yolov10n/onnx/model.onnx` | |
+| `SEED_DEMO_USERS` | `true` | Creates the two demo accounts. |
+| `DRONE` / `BRIDGE_URL` | `sim` | `DRONE=mini2` with the bridge app's URL flies the real drone. |
+
+## Deploying (e.g. Render)
+
+- Root directory: `api`
+- Build: `pip install -r requirements.txt && python scripts/download_model.py`
+- Start: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+- Add a Postgres database and set `DATABASE_URL`, `JWT_SECRET` and `CLIENT_ORIGINS`.
+
+**Cookie warning:** if the client and API are on different *sites* (for example two `*.onrender.com` apps, which count as different sites), Safari and some privacy settings block the cookie. Putting both on subdomains of one domain you own (`app.example.com` and `api.example.com`) keeps the origins separate, as the course requires, while the cookie stays first-party. Test login in Chrome and Safari before submitting.
+
+## DJI Mini 2
+
+- `app/mini2.py` calls an Android **bridge app** over HTTP (see `bridge/README.md`). The Mini 2 has no forward obstacle sensor, so telemetry reports `tof_mm = None`.
+- Whether DJI's Mobile SDK velocity virtual sticks work on the Mini 2 is still unverified.
 
 ## Not yet built
 
-- The Android bridge app. Its endpoints are defined above, but the app is not written.
-- Whether MSDK velocity virtual sticks work on the Mini 2 is **unverified**. The search results were inconclusive, so test it on hardware with propellers off first.
-- Vision pipeline, PID follow controller, recording, and the edge WebSocket hub.
-- The feasibility study (Claude Docs) still describes the TT and the Wi-Fi UDP setup. Update it when the Mini 2 path is confirmed.
-- Vision pipeline (YOLO, tracking, pose) and the PID follow controller on the edge laptop.
-- Recording, database, auth beyond a single shared key, and the edge WebSocket hub.
+- Follow sessions are kept in memory. Milestone 2 needs them (and recordings) in the database with full CRUD, including PATCH and DELETE.
+- Edge WebSocket hub, recordings, and the Android bridge app.

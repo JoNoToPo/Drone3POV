@@ -41,13 +41,8 @@ def test_emergency_stop_goes_straight_to_bridge():
 
 
 def test_app_uses_mini2_when_configured(monkeypatch):
-    from fastapi.testclient import TestClient
-
     from app import main
 
     monkeypatch.setenv("DRONE", "mini2")
-    monkeypatch.setenv("BRIDGE_URL", "http://127.0.0.1:1")  # not contacted for these checks
-    drone = main._default_drone()
-    assert isinstance(drone, Mini2Adapter)
-    # The app itself still starts without contacting the bridge.
-    assert TestClient(main.create_app(drone)).get("/v1/drone/status").status_code == 401
+    monkeypatch.setenv("BRIDGE_URL", "http://127.0.0.1:1")  # not contacted for this check
+    assert isinstance(main._default_drone(), Mini2Adapter)

@@ -37,6 +37,7 @@ class FollowSession:
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     state: State = State.SEARCHING
     end_reason: str | None = None
+    owner_id: int | None = None
 
     def stop(self, reason: str) -> None:
         if self.state not in (State.LANDING, State.FINISHED):

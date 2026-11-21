@@ -9,3 +9,7 @@ bridge/local.properties
 bridge/**/*.keystore
 .idea/
 *.iml
+
+# API runtime files
+api/*.db
+api/models/

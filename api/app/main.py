@@ -1,120 +1,38 @@
-"""Follow-me API (v1). Cloud side only: it sets goals and limits and never sits in the control loop."""
+"""Drone3POV API (v1). Run with: uvicorn app.main:app"""
 
+import logging
 import os
 import threading
-from typing import Literal
 
-from fastapi import Depends, FastAPI, Header, HTTPException, status
-from pydantic import BaseModel, Field
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from sqlalchemy import select
 
-from . import safety
+from . import messages
+from .config import DEV_JWT_SECRET, Settings
+from .db import User, make_session_factory
 from .drone import DroneAdapter, SimulatedDrone
-from .session import FollowSession, State
+from .routers import admin, auth, sessions, users, vision
+from .security import hash_password
+from .usage import USAGE_HEADERS, UsageTracker
+from .vision import PersonDetector
 
-API_KEY = os.environ.get("FOLLOW_API_KEY", "dev-key")
+log = logging.getLogger("drone3pov")
 
-
-class StartRequest(BaseModel):
-    mode: Literal["third_person"] = "third_person"
-    distance_m: float = Field(default=safety.DEFAULT_DISTANCE_M)
-    height_m: float = Field(default=safety.DEFAULT_HEIGHT_M)
-
-
-class SessionOut(BaseModel):
-    id: str
-    state: State
-    mode: str
-    distance_m: float
-    height_m: float
-    end_reason: str | None
+# Demonstration accounts required by the course. Passwords are hashed like any other account.
+DEMO_USERS = (
+    ("john@john.com", "123", "user"),
+    ("admin@admin.com", "111", "admin"),
+)
 
 
-class DroneStatus(BaseModel):
-    battery_pct: int
-    height_m: float
-    tof_mm: int | None
-    link_ok: bool
-
-
-def create_app(drone: DroneAdapter | None = None) -> FastAPI:
-    app = FastAPI(title="Follow-me drone API", version="1.0.0")
-    app.state.drone = drone if drone is not None else SimulatedDrone()
-    app.state.sessions: dict[str, FollowSession] = {}
-    app.state.active_id: str | None = None
-    app.state.lock = threading.Lock()
-
-    def require_key(x_api_key: str | None = Header(default=None)) -> None:
-        if x_api_key != API_KEY:
-            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid API key")
-
-    def get_session(session_id: str) -> FollowSession:
-        session = app.state.sessions.get(session_id)
-        if session is None:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "session not found")
-        return session
-
-    @app.post("/v1/follow-sessions", status_code=status.HTTP_202_ACCEPTED,
-              response_model=SessionOut, dependencies=[Depends(require_key)])
-    def start_session(body: StartRequest) -> SessionOut:
-        try:
-            settings = safety.validate_settings(body.mode, body.distance_m, body.height_m)
-        except safety.SafetyError as exc:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
-        with app.state.lock:
-            if app.state.active_id is not None:
-                raise HTTPException(status.HTTP_409_CONFLICT, "another session already controls the drone")
-            session = FollowSession(settings=settings)
-            app.state.sessions[session.id] = session
-            app.state.active_id = session.id
-            app.state.drone.connect()
-            app.state.drone.takeoff()
-        return _out(session)
-
-    @app.get("/v1/follow-sessions/{session_id}", response_model=SessionOut,
-             dependencies=[Depends(require_key)])
-    def read_session(session_id: str) -> SessionOut:
-        return _out(get_session(session_id))
-
-    @app.post("/v1/follow-sessions/{session_id}/stop", response_model=SessionOut,
-              dependencies=[Depends(require_key)])
-    def stop_session(session_id: str) -> SessionOut:
-        session = get_session(session_id)
-        with app.state.lock:
-            session.stop("stopped_by_user")
-            app.state.drone.land()
-            session.confirm_landed()
-            if app.state.active_id == session_id:
-                app.state.active_id = None
-        return _out(session)
-
-    @app.get("/v1/drone/status", response_model=DroneStatus, dependencies=[Depends(require_key)])
-    def drone_status() -> DroneStatus:
-        t = app.state.drone.telemetry()
-        return DroneStatus(battery_pct=t.battery_pct, height_m=t.height_m, tof_mm=t.tof_mm, link_ok=t.link_ok)
-
-    @app.post("/v1/drone/emergency-stop", dependencies=[Depends(require_key)])
-    def emergency_stop() -> dict:
-        # Skips the session lock on purpose: it must never wait behind anything.
-        app.state.drone.emergency_stop()
-        for session in app.state.sessions.values():
-            if session.state not in (State.FINISHED,):
-                session.stop("emergency_stop")
-                session.confirm_landed()
-        app.state.active_id = None
-        return {"status": "stopped"}
-
-    return app
-
-
-def _out(s: FollowSession) -> SessionOut:
-    return SessionOut(
-        id=s.id,
-        state=s.state,
-        mode=s.settings.mode,
-        distance_m=s.settings.distance_m,
-        height_m=s.settings.height_m,
-        end_reason=s.end_reason,
-    )
+def seed_demo_users(session_factory) -> None:
+    with session_factory() as db:
+        for email, password, role in DEMO_USERS:
+            if db.scalar(select(User).where(User.email == email)) is None:
+                db.add(User(email=email, password_hash=hash_password(password), role=role))
+        db.commit()
 
 
 def _default_drone() -> DroneAdapter:
@@ -126,4 +44,58 @@ def _default_drone() -> DroneAdapter:
     return SimulatedDrone()
 
 
-app = create_app(_default_drone())
+def create_app(settings: Settings | None = None, drone: DroneAdapter | None = None) -> FastAPI:
+    settings = settings or Settings.from_env()
+    if settings.jwt_secret == DEV_JWT_SECRET:
+        log.warning("JWT_SECRET is not set; using the development secret. Set it before deploying.")
+
+    app = FastAPI(
+        title="Drone3POV API",
+        version="1.0.0",
+        description=(
+            "Follow-me drone service: a DJI Mini 2 follows one consenting person and records the flight. "
+            "Log in with `POST /api/v1/auth/login`; the API sets an HttpOnly cookie that authenticates "
+            "every other request. A `Authorization: Bearer <token>` header also works for API clients.\n\n"
+            f"Each user gets {settings.free_calls} free calls. Every counted response carries "
+            "`X-Free-Calls-Used`, `X-Free-Calls-Limit` and `X-Free-Calls-Exceeded` headers."
+        ),
+        docs_url="/doc/",
+        redoc_url=None,
+        openapi_url="/api/v1/openapi.json",
+    )
+
+    engine, session_factory = make_session_factory(settings.database_url)
+    if settings.seed_demo_users:
+        seed_demo_users(session_factory)
+
+    app.state.settings = settings
+    app.state.engine = engine
+    app.state.SessionLocal = session_factory
+    app.state.detector = PersonDetector(settings.model_path)
+    app.state.drone = drone if drone is not None else _default_drone()
+    app.state.sessions = {}
+    app.state.active_id = None
+    app.state.lock = threading.Lock()
+
+    for router in (auth.router, users.router, admin.router, vision.router, sessions.router):
+        app.include_router(router)
+
+    @app.exception_handler(Exception)
+    async def _server_error(_request: Request, exc: Exception) -> JSONResponse:
+        log.exception("Unhandled error", exc_info=exc)
+        return JSONResponse(status_code=500, content={"detail": messages.SERVER_ERROR})
+
+    # Added last so it runs first: CORS headers are applied even to error responses.
+    app.add_middleware(UsageTracker)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=list(settings.client_origins),
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["Content-Type", "Authorization"],
+        expose_headers=USAGE_HEADERS,
+    )
+    return app
+
+
+app = create_app()

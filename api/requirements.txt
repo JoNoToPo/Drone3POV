@@ -1,5 +1,14 @@
 fastapi
-uvicorn
+uvicorn[standard]
 pydantic
+python-multipart
+sqlalchemy
+psycopg[binary]
+bcrypt
+pyjwt
+onnxruntime
+numpy
+pillow
+huggingface_hub
 httpx
 pytest

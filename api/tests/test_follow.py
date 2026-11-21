@@ -2,16 +2,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import safety
-from app.main import create_app
 from app.session import FollowSession, Observation, State
 from app.safety import SafetyError, validate_settings
 
-KEY = {"X-API-Key": "dev-key"}
-
-
-@pytest.fixture
-def client():
-    return TestClient(create_app())
+from .conftest import login
 
 
 # --- safety limits -------------------------------------------------------
@@ -85,34 +79,56 @@ def test_safety_triggers_land(obs, reason):
 
 # --- API -----------------------------------------------------------------
 
-def test_requires_api_key(client):
-    assert client.post("/v1/follow-sessions", json={}).status_code == 401
+SESSIONS = "/api/v1/follow-sessions"
 
 
-def test_start_and_stop_session(client):
-    r = client.post("/v1/follow-sessions", json={"distance_m": 2.0}, headers=KEY)
+def test_sessions_need_login(client):
+    assert client.post(SESSIONS, json={}).status_code == 401
+
+
+def test_start_and_stop_session(user_client):
+    r = user_client.post(SESSIONS, json={"distance_m": 2.0})
     assert r.status_code == 202
     body = r.json()
     assert body["state"] == "searching"
-    assert client.get(f"/v1/follow-sessions/{body['id']}", headers=KEY).json()["id"] == body["id"]
+    assert user_client.get(f"{SESSIONS}/{body['id']}").json()["id"] == body["id"]
 
-    stopped = client.post(f"/v1/follow-sessions/{body['id']}/stop", headers=KEY).json()
+    stopped = user_client.post(f"{SESSIONS}/{body['id']}/stop").json()
     assert stopped["state"] == "finished"
     assert stopped["end_reason"] == "stopped_by_user"
 
 
-def test_second_session_rejected_while_one_is_active(client):
-    assert client.post("/v1/follow-sessions", json={}, headers=KEY).status_code == 202
-    assert client.post("/v1/follow-sessions", json={}, headers=KEY).status_code == 409
+def test_second_session_rejected_while_one_is_active(user_client):
+    assert user_client.post(SESSIONS, json={}).status_code == 202
+    assert user_client.post(SESSIONS, json={}).status_code == 409
 
 
-def test_bad_distance_is_422(client):
-    r = client.post("/v1/follow-sessions", json={"distance_m": 9}, headers=KEY)
-    assert r.status_code == 422
+def test_bad_distance_is_422(user_client):
+    assert user_client.post(SESSIONS, json={"distance_m": 9}).status_code == 422
 
 
-def test_emergency_stop_clears_active_session(client):
-    client.post("/v1/follow-sessions", json={}, headers=KEY)
-    assert client.post("/v1/drone/emergency-stop", headers=KEY).json() == {"status": "stopped"}
+def test_unknown_fields_rejected(user_client):
+    assert user_client.post(SESSIONS, json={"max_speed": 50}).status_code == 422
+
+
+def test_missing_session_is_404(user_client):
+    assert user_client.get(f"{SESSIONS}/nope").status_code == 404
+
+
+def test_users_cannot_touch_each_others_sessions(user_client):
+    session_id = user_client.post(SESSIONS, json={}).json()["id"]
+
+    other = TestClient(user_client.app)  # same app, separate cookie jar
+    other.post("/api/v1/auth/register", json={"email": "tom@example.com", "password": "secret"})
+    login(other, "tom@example.com", "secret")
+    assert other.get(f"{SESSIONS}/{session_id}").status_code == 403
+    assert other.post(f"{SESSIONS}/{session_id}/stop").status_code == 403
+
+
+def test_emergency_stop_clears_active_session(user_client):
+    user_client.post(SESSIONS, json={})
+    r = user_client.post("/api/v1/drone/emergency-stop")
+    assert r.status_code == 200
+    assert "stopped" in r.json()["message"]
     # A new session can start once the emergency stop has cleared the lock.
-    assert client.post("/v1/follow-sessions", json={}, headers=KEY).status_code == 202
+    assert user_client.post(SESSIONS, json={}).status_code == 202
