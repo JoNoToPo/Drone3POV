@@ -1,3 +1,11 @@
 .venv/
 __pycache__/
 .pytest_cache/
+
+# Android (bridge/)
+bridge/**/build/
+bridge/.gradle/
+bridge/local.properties
+bridge/**/*.keystore
+.idea/
+*.iml
