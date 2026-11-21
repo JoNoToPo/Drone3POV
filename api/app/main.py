@@ -44,8 +44,22 @@ def _default_drone() -> DroneAdapter:
     return SimulatedDrone()
 
 
+def check_production_settings(settings: Settings) -> None:
+    """On a host (Vercel sets VERCEL=1), refuse to start with settings that are unsafe or can't work."""
+    if not (os.environ.get("VERCEL") or os.environ.get("REQUIRE_PRODUCTION_SETTINGS")):
+        return
+    problems = []
+    if settings.jwt_secret == DEV_JWT_SECRET or len(settings.jwt_secret) < 32:
+        problems.append("JWT_SECRET must be set to a random value of at least 32 characters.")
+    if settings.database_url.startswith("sqlite"):
+        problems.append("DATABASE_URL must point to Postgres; the host's file system is read-only.")
+    if problems:
+        raise RuntimeError("Refusing to start: " + " ".join(problems))
+
+
 def create_app(settings: Settings | None = None, drone: DroneAdapter | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
+    check_production_settings(settings)
     if settings.jwt_secret == DEV_JWT_SECRET:
         log.warning("JWT_SECRET is not set; using the development secret. Set it before deploying.")
 

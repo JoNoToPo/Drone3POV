@@ -62,12 +62,21 @@ The demo accounts `john@john.com` / `123` (user) and `admin@admin.com` / `111` (
 | `SEED_DEMO_USERS` | `true` | Creates the two demo accounts. |
 | `DRONE` / `BRIDGE_URL` | `sim` | `DRONE=mini2` with the bridge app's URL flies the real drone. |
 
-## Deploying (e.g. Render)
+## Deploying to Railway
 
-- Root directory: `api`
-- Build: `pip install -r requirements.txt && python scripts/download_model.py`
-- Start: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
-- Add a Postgres database and set `DATABASE_URL`, `JWT_SECRET` and `CLIENT_ORIGINS`.
+1. New project from the GitHub repo. In the service's **Settings → Source**, set **Root Directory** to `/api`.
+2. If Railway doesn't pick up `api/railway.json` by itself, set **Settings → Config-as-code → Railway Config File** to `/api/railway.json` (the path is from the repo root, not the root directory).
+3. Add a **Postgres** database to the same project.
+4. In the API service's **Variables**, set:
+   - `DATABASE_URL` = `${{Postgres.DATABASE_URL}}`
+   - `JWT_SECRET` = a long random value (`python -c "import secrets; print(secrets.token_urlsafe(48))"`)
+   - `CLIENT_ORIGINS` = the client's URL, e.g. `https://your-client.vercel.app`
+   - `REQUIRE_PRODUCTION_SETTINGS` = `1` (the API then refuses to start with the dev secret or SQLite)
+5. **Settings → Networking → Generate Domain** for a public URL.
+
+`railway.json` starts the app with `python scripts/download_model.py && uvicorn ...`, so the model is downloaded to `api/models/` on the server at every start, and the health check waits for `/doc/`. `.python-version` pins Python 3.13, because 3.14 breaks the FastAPI and pydantic versions in use.
+
+For the self-hosting bonus demo, open a shell on the service (`railway ssh` with the Railway CLI) and show `models/yolov10n/onnx/model.onnx`. Renaming it makes `POST /api/v1/vision/detect` return 503 at once; renaming it back restores detection.
 
 **Cookie warning:** if the client and API are on different *sites* (for example two `*.onrender.com` apps, which count as different sites), Safari and some privacy settings block the cookie. Putting both on subdomains of one domain you own (`app.example.com` and `api.example.com`) keeps the origins separate, as the course requires, while the cookie stays first-party. Test login in Chrome and Safari before submitting.
 

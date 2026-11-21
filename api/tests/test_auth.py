@@ -130,3 +130,18 @@ def test_docs_are_served_at_doc(client):
     spec = client.get("/api/v1/openapi.json").json()
     assert spec["info"]["version"] == "1.0.0"
     assert "/api/v1/vision/detect" in spec["paths"]
+
+
+def test_host_refuses_dev_secret_and_sqlite(monkeypatch, settings):
+    import pytest
+    from dataclasses import replace
+
+    from app.config import DEV_JWT_SECRET
+    from app.main import check_production_settings
+
+    monkeypatch.setenv("VERCEL", "1")
+    with pytest.raises(RuntimeError, match="JWT_SECRET"):
+        check_production_settings(replace(settings, jwt_secret=DEV_JWT_SECRET, database_url="postgresql+psycopg://x/y"))
+    with pytest.raises(RuntimeError, match="DATABASE_URL"):
+        check_production_settings(settings)  # long secret but SQLite
+    check_production_settings(replace(settings, database_url="postgresql+psycopg://x/y"))  # fine
