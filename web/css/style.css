@@ -1,0 +1,164 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color: #1d2433;
+  background: #f4f6fa;
+  line-height: 1.5;
+}
+
+nav {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 24px;
+  background: #1d2433;
+}
+
+nav a,
+.link-button {
+  color: #fff;
+  text-decoration: none;
+  margin-left: 16px;
+  font-size: 15px;
+}
+
+nav .brand {
+  margin-left: 0;
+  font-weight: 700;
+  font-size: 18px;
+}
+
+.link-button {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  font-family: inherit;
+}
+
+main {
+  max-width: 900px;
+  margin: 32px auto;
+  padding: 0 20px;
+}
+
+.card {
+  background: #fff;
+  border-radius: 8px;
+  padding: 24px;
+  margin-bottom: 24px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.narrow {
+  max-width: 420px;
+  margin: 0 auto;
+}
+
+h1 {
+  margin-top: 0;
+}
+
+.hero {
+  text-align: center;
+  padding: 48px 24px;
+}
+
+.hero p {
+  font-size: 18px;
+  color: #4a5368;
+}
+
+label {
+  display: block;
+  margin: 12px 0 4px;
+  font-weight: 600;
+}
+
+input[type="email"],
+input[type="password"] {
+  width: 100%;
+  padding: 10px;
+  border: 1px solid #c9cfdb;
+  border-radius: 6px;
+  font-size: 15px;
+}
+
+button.primary,
+a.primary {
+  display: inline-block;
+  margin-top: 16px;
+  padding: 10px 20px;
+  background: #2f6fed;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-size: 15px;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+button.primary:disabled {
+  background: #8aa6e0;
+  cursor: default;
+}
+
+.msg {
+  margin-top: 16px;
+  padding: 10px 12px;
+  border-radius: 6px;
+}
+
+.msg.error {
+  background: #fde8e8;
+  color: #9b1c1c;
+}
+
+.msg.ok {
+  background: #e6f6ea;
+  color: #1e6b34;
+}
+
+.warning {
+  background: #fff4de;
+  color: #7a4a00;
+  padding: 10px 12px;
+  border-radius: 6px;
+}
+
+.stats span {
+  font-weight: 600;
+}
+
+#preview {
+  position: relative;
+  display: inline-block;
+  margin-top: 16px;
+  max-width: 100%;
+}
+
+#preview canvas {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 8px;
+  border-bottom: 1px solid #e3e7ee;
+}
+
+th {
+  background: #f0f2f7;
+}
