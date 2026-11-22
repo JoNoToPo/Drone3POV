@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>My account - Drone3POV</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <nav id="nav"></nav>
+
+  <main>
+    <p class="msg" id="page-message" hidden></p>
+
+    <div id="content" hidden>
+      <section class="card">
+        <h1 id="heading"></h1>
+        <p class="stats"><span id="email-label"></span>: <span id="email"></span></p>
+        <p class="stats"><span id="role-label"></span>: <span id="role"></span></p>
+        <p class="stats"><span id="calls-label"></span>: <span id="calls"></span></p>
+        <p class="warning" id="warning" hidden></p>
+      </section>
+
+      <section class="card">
+        <h2 id="detect-title"></h2>
+        <p id="detect-help"></p>
+        <input type="file" id="photo" accept="image/jpeg,image/png">
+        <br>
+        <button class="primary" id="detect"></button>
+        <p class="msg" id="detect-message" hidden></p>
+        <div id="preview">
+          <canvas id="canvas" hidden></canvas>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <script src="js/config.js"></script>
+  <script src="js/messages.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/page.js"></script>
+  <script src="js/user.js"></script>
+</body>
+</html>
