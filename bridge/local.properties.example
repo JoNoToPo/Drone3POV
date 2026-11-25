@@ -1,0 +1,6 @@
+# Copy to local.properties (git-ignored) and fill in.
+# Android Studio writes sdk.dir for you on first sync.
+sdk.dir=C\:\\Users\\you\\AppData\\Local\\Android\\Sdk
+
+# App key from developer.dji.com, created for package name ca.bcit.drone3pov.bridge.
+DJI_API_KEY=paste-your-key-here
