@@ -7,6 +7,7 @@ from ..config import Settings
 from ..db import User
 from ..security import get_current_user, get_db, get_settings
 from ..usage import calls_used
+from ..schemas import error
 
 router = APIRouter(prefix="/api/v1/users", tags=["users"])
 
@@ -21,7 +22,7 @@ class MeOut(BaseModel):
     warning: str | None
 
 
-@router.get("/me", response_model=MeOut, responses={401: {"description": "Not logged in"}})
+@router.get("/me", response_model=MeOut, responses={401: error("Not logged in")})
 def read_me(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),

@@ -5,7 +5,8 @@ from datetime import timedelta
 
 import bcrypt
 import jwt
-from fastapi import Depends, HTTPException, Request, Response, status
+from fastapi import Depends, HTTPException, Request, Response, Security, status
+from fastapi.security import APIKeyCookie, HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
 from . import messages
@@ -14,6 +15,21 @@ from .db import User, utcnow
 
 COOKIE_NAME = "access_token"
 ALGORITHM = "HS256"
+
+# Declared as security schemes so the OpenAPI docs mark protected routes and show an Authorize button.
+# auto_error=False lets get_current_user return the API's own 401 messages.
+cookie_scheme = APIKeyCookie(
+    name=COOKIE_NAME,
+    scheme_name="cookieAuth",
+    description="Set by POST /api/v1/auth/login. Browsers (and Swagger UI on this site) send it automatically.",
+    auto_error=False,
+)
+bearer_scheme = HTTPBearer(
+    scheme_name="bearerAuth",
+    bearerFormat="JWT",
+    description="For API clients such as Postman: send the same JWT as `Authorization: Bearer <token>`.",
+    auto_error=False,
+)
 
 
 def hash_password(password: str) -> str:
@@ -72,23 +88,14 @@ def get_db(request: Request) -> Iterator[Session]:
         db.close()
 
 
-def _token_from(request: Request) -> str | None:
-    token = request.cookies.get(COOKIE_NAME)
-    if token:
-        return token
-    # Bearer tokens are accepted too, for Postman and API consumers that aren't browsers.
-    header = request.headers.get("authorization", "")
-    if header.lower().startswith("bearer "):
-        return header[7:].strip() or None
-    return None
-
-
 def get_current_user(
     request: Request,
+    cookie_token: str | None = Security(cookie_scheme),
+    bearer: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> User:
-    token = _token_from(request)
+    token = cookie_token or (bearer.credentials if bearer else None)
     if not token:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, messages.NOT_LOGGED_IN)
     try:

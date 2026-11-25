@@ -6,7 +6,7 @@ import threading
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import select
 
 from . import messages
@@ -25,6 +25,38 @@ DEMO_USERS = (
     ("john@john.com", "123", "user"),
     ("admin@admin.com", "111", "admin"),
 )
+
+
+API_DESCRIPTION = """
+Follow-me drone service: a DJI Mini 2 follows one consenting person and records the flight.
+The AI is person detection with a self-hosted model,
+[onnx-community/yolov10n](https://huggingface.co/onnx-community/yolov10n), run on this server.
+
+### Testing in Swagger
+1. Open **auth → POST /api/v1/auth/login**, click **Try it out**, and **Execute** the example body
+   (`john@john.com` / `123` for a user, `admin@admin.com` / `111` for an administrator).
+2. The response sets an HttpOnly cookie. Every other **Try it out** on this page sends it automatically,
+   so protected endpoints now work. You don't need the **Authorize** button in the browser.
+3. **POST /api/v1/auth/logout** clears the cookie. Protected endpoints then return 401.
+
+For Postman or curl, send the JWT as `Authorization: Bearer <token>` instead.
+
+### Free calls
+Each user gets {free_calls} free calls. Every counted response carries `X-Free-Calls-Used`,
+`X-Free-Calls-Limit` and `X-Free-Calls-Exceeded` headers. Login, registration, logout and these
+docs are not counted, and the service keeps working after the limit.
+
+### Errors
+Every error response is JSON with a `detail` message, e.g. `{{"detail": "Log in to use this service."}}`.
+"""
+
+OPENAPI_TAGS = [
+    {"name": "auth", "description": "Register, log in and log out. Not counted toward free calls."},
+    {"name": "users", "description": "The logged-in user's profile and API consumption."},
+    {"name": "vision (AI)", "description": "Person detection with the self-hosted YOLOv10n model."},
+    {"name": "follow sessions", "description": "Start, read and stop follow sessions, and control the drone."},
+    {"name": "admin", "description": "Administrator only: users and API usage statistics."},
+]
 
 
 def seed_demo_users(session_factory) -> None:
@@ -66,17 +98,23 @@ def create_app(settings: Settings | None = None, drone: DroneAdapter | None = No
     app = FastAPI(
         title="Drone3POV API",
         version="1.0.0",
-        description=(
-            "Follow-me drone service: a DJI Mini 2 follows one consenting person and records the flight. "
-            "Log in with `POST /api/v1/auth/login`; the API sets an HttpOnly cookie that authenticates "
-            "every other request. A `Authorization: Bearer <token>` header also works for API clients.\n\n"
-            f"Each user gets {settings.free_calls} free calls. Every counted response carries "
-            "`X-Free-Calls-Used`, `X-Free-Calls-Limit` and `X-Free-Calls-Exceeded` headers."
-        ),
+        description=API_DESCRIPTION.format(free_calls=settings.free_calls),
+        openapi_tags=OPENAPI_TAGS,
         docs_url="/doc/",
         redoc_url=None,
         openapi_url="/api/v1/openapi.json",
+        swagger_ui_parameters={
+            "persistAuthorization": True,  # keep a pasted Bearer token across page reloads
+            "withCredentials": True,  # send the login cookie with "Try it out" requests
+            "displayRequestDuration": True,
+            "tryItOutEnabled": True,
+            "filter": True,
+        },
     )
+
+    @app.get("/doc", include_in_schema=False)
+    def _doc_without_slash() -> RedirectResponse:
+        return RedirectResponse("/doc/")
 
     engine, session_factory = make_session_factory(settings.database_url)
     if settings.seed_demo_users:

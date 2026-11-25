@@ -9,12 +9,16 @@ from .. import messages, safety
 from ..db import User
 from ..security import get_current_user
 from ..session import FollowSession, State
+from ..schemas import error
 
-router = APIRouter(prefix="/api/v1", tags=["follow sessions"], responses={401: {"description": "Not logged in"}})
+router = APIRouter(prefix="/api/v1", tags=["follow sessions"], responses={401: error("Not logged in")})
 
 
 class StartRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={"examples": [{"mode": "third_person", "distance_m": 2.0, "height_m": 1.6}]},
+    )
 
     mode: Literal["third_person"] = "third_person"
     distance_m: float = Field(default=safety.DEFAULT_DISTANCE_M)
@@ -62,7 +66,7 @@ def _owned_session(request: Request, session_id: str, user: User) -> FollowSessi
 
 
 @router.post("/follow-sessions", status_code=status.HTTP_202_ACCEPTED, response_model=SessionOut,
-             responses={409: {"description": "Drone already in use"}, 422: {"description": "Setting outside safety limits"}})
+             responses={409: error("Drone already in use"), 422: error("Setting outside safety limits")})
 def start_session(body: StartRequest, request: Request, user: User = Depends(get_current_user)) -> SessionOut:
     """Start a follow session. The drone takes off and searches for the subject."""
     try:
@@ -82,14 +86,14 @@ def start_session(body: StartRequest, request: Request, user: User = Depends(get
 
 
 @router.get("/follow-sessions/{session_id}", response_model=SessionOut,
-            responses={403: {"description": "Not your session"}, 404: {"description": "No such session"}})
+            responses={403: error("Not your session"), 404: error("No such session")})
 def read_session(session_id: str, request: Request, user: User = Depends(get_current_user)) -> SessionOut:
     """State of one of your follow sessions."""
     return _out(_owned_session(request, session_id, user))
 
 
 @router.post("/follow-sessions/{session_id}/stop", response_model=SessionOut,
-             responses={403: {"description": "Not your session"}, 404: {"description": "No such session"}})
+             responses={403: error("Not your session"), 404: error("No such session")})
 def stop_session(session_id: str, request: Request, user: User = Depends(get_current_user)) -> SessionOut:
     """Stop following and land."""
     session = _owned_session(request, session_id, user)

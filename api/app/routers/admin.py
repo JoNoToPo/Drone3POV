@@ -9,12 +9,13 @@ from sqlalchemy.orm import Session
 
 from ..db import ApiUsage, User
 from ..security import get_db, require_admin
+from ..schemas import error
 
 router = APIRouter(
     prefix="/api/v1/admin",
     tags=["admin"],
     dependencies=[Depends(require_admin)],
-    responses={401: {"description": "Not logged in"}, 403: {"description": "Not an administrator"}},
+    responses={401: error("Not logged in"), 403: error("Not an administrator")},
 )
 
 

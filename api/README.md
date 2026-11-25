@@ -2,6 +2,8 @@
 
 The Drone3POV REST API (FastAPI). Docs are served at `/doc/` and the OpenAPI spec at `/api/v1/openapi.json`.
 
+To test with Swagger (for example in a lab), see [`docs/swagger-lab.md`](../docs/swagger-lab.md).
+
 ## Endpoints (v1)
 
 | Method | Path | Auth | Purpose |

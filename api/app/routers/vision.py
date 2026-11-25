@@ -6,6 +6,7 @@ from ..config import Settings
 from ..db import User
 from ..security import get_current_user, get_settings
 from ..vision import ImageUnreadable, ModelUnavailable
+from ..schemas import error
 
 router = APIRouter(prefix="/api/v1/vision", tags=["vision (AI)"])
 
@@ -30,11 +31,11 @@ class DetectOut(BaseModel):
     "/detect",
     response_model=DetectOut,
     responses={
-        401: {"description": "Not logged in"},
-        413: {"description": "Image too large"},
-        415: {"description": "Not an image"},
-        422: {"description": "Image could not be decoded"},
-        503: {"description": "Model file not available on the server"},
+        401: error("Not logged in"),
+        413: error("Image too large"),
+        415: error("Not an image"),
+        422: error("Image could not be decoded"),
+        503: error("Model file not available on the server"),
     },
 )
 async def detect_people(

@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from .. import messages
 from ..config import Settings
 from ..db import User
+from ..schemas import error
 from ..security import (
     clear_auth_cookie,
     create_token,
@@ -26,7 +27,10 @@ EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 class Credentials(BaseModel):
     # extra="forbid" blocks mass assignment: a client can't send "role": "admin".
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={"examples": [{"email": "john@john.com", "password": "123"}]},
+    )
 
     email: str
     password: str
@@ -59,7 +63,7 @@ class MessageOut(BaseModel):
 
 
 @router.post("/register", status_code=status.HTTP_201_CREATED, response_model=UserOut,
-             responses={409: {"description": "Email already registered"}})
+             responses={409: error("Email already registered")})
 def register(body: Credentials, db: Session = Depends(get_db)) -> UserOut:
     """Create a regular user account. New accounts always get the `user` role."""
     user = User(email=body.email, password_hash=hash_password(body.password), role="user")
@@ -72,7 +76,7 @@ def register(body: Credentials, db: Session = Depends(get_db)) -> UserOut:
     return UserOut(id=user.id, email=user.email, role=user.role)
 
 
-@router.post("/login", response_model=UserOut, responses={401: {"description": "Wrong email or password"}})
+@router.post("/login", response_model=UserOut, responses={401: error("Wrong email or password")})
 def login(
     body: Credentials,
     response: Response,
