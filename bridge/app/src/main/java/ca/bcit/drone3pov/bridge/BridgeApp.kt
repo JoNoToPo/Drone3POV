@@ -7,6 +7,7 @@ class BridgeApp : Application() {
     override fun attachBaseContext(base: Context) {
         super.attachBaseContext(base)
         // MSDK v4 has to load its classes before anything touches the SDK.
-        com.secneo.sdk.Helper.install(this)
+        // Since 4.16 the loader is com.cySdkyc.clx.Helper; older docs and samples say com.secneo.sdk.Helper.
+        com.cySdkyc.clx.Helper.install(this)
     }
 }

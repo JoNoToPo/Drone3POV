@@ -7,7 +7,11 @@ Kotlin, MSDK 4.18, NanoHTTPD. The Mini 2 isn't supported by MSDK v5, so this has
 ## Setup
 
 1. Register an app at developer.dji.com with package name `ca.bcit.drone3pov.bridge` and copy the key.
-2. Copy `local.properties.example` to `local.properties` and paste the key into `DJI_API_KEY`. That file is git-ignored. Never commit the key.
+2. Copy `local.properties.example` to `local.properties` and fill in both lines. That file is git-ignored. Never commit the key.
+   - `sdk.dir`: your Android SDK folder, usually `C:/Users/<your-windows-user>/AppData/Local/Android/Sdk` (forward slashes work; backslashes must be doubled). Android Studio shows it under **Settings → Languages & Frameworks → Android SDK**. Android Studio won't overwrite the example's placeholder path, so if you leave it, the build fails with "SDK location not found".
+   - `DJI_API_KEY`: the key from step 1.
+
+   The DJI Mobile SDK itself (`com.dji:dji-sdk:4.18`) isn't downloaded by hand: Gradle fetches it from Maven Central on the first build. You need the **Android 13 (API 33)** platform installed in the SDK Manager, because the app compiles against it.
 3. Open this `bridge/` folder in Android Studio (not the repo root) and let it sync.
 4. Run on an Android phone (7.0 or newer). The first run needs internet so the SDK can register.
 5. Plug the phone into the RC, power on the drone, and accept the USB prompt.

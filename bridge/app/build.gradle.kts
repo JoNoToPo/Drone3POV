@@ -80,5 +80,10 @@ dependencies {
     compileOnly("com.dji:dji-sdk-provided:4.18")
     implementation("org.nanohttpd:nanohttpd:2.3.1")
 
+    // The DJI SDK's own layouts use AppCompat (srcCompat) and ConstraintLayout attributes,
+    // so resource linking fails without these. Versions chosen to build with compileSdk 33.
+    implementation("androidx.appcompat:appcompat:1.6.1")
+    implementation("androidx.constraintlayout:constraintlayout:2.1.4")
+
     testImplementation("junit:junit:4.13.2")
 }
