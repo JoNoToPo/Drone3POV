@@ -19,7 +19,7 @@ object Bridge {
         d.start()
         drone = d
         try {
-            server = HttpBridgeServer(Limits.PORT, Router(d)).also {
+            server = HttpBridgeServer(Limits.PORT, Router(d), d).also {
                 it.start(5_000, false)
             }
             d.events.add("HTTP server on port ${Limits.PORT}")

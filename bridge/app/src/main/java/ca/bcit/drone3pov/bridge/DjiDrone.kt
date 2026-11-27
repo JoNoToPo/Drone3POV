@@ -10,6 +10,9 @@ import ca.bcit.drone3pov.bridge.core.SimulatorStart
 import ca.bcit.drone3pov.bridge.core.Telemetry
 import ca.bcit.drone3pov.bridge.core.Velocity
 import ca.bcit.drone3pov.bridge.core.VelocityGate
+import ca.bcit.drone3pov.bridge.core.VideoFeedKind
+import ca.bcit.drone3pov.bridge.core.VideoHub
+import ca.bcit.drone3pov.bridge.core.VideoSource
 import dji.common.error.DJIError
 import dji.common.error.DJISDKError
 import dji.common.flightcontroller.FlightControllerState
@@ -23,10 +26,12 @@ import dji.common.flightcontroller.virtualstick.YawControlMode
 import dji.common.model.LocationCoordinate2D
 import dji.sdk.base.BaseComponent
 import dji.sdk.base.BaseProduct
+import dji.sdk.camera.VideoFeeder
 import dji.sdk.flightcontroller.FlightController
 import dji.sdk.products.Aircraft
 import dji.sdk.sdkmanager.DJISDKInitEvent
 import dji.sdk.sdkmanager.DJISDKManager
+import java.io.InputStream
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
@@ -39,7 +44,7 @@ private const val TAG = "Drone3POV.DjiDrone"
  * Threading: SDK callbacks arrive on SDK threads, HTTP requests on NanoHTTPD threads, and the
  * stick loop on its own executor. Shared state is @Volatile or lives in [VelocityGate].
  */
-class DjiDrone(private val context: Context) : DroneControl {
+class DjiDrone(private val context: Context) : DroneControl, VideoSource {
 
     private val gate = VelocityGate()
     private val loop: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor()
@@ -60,6 +65,13 @@ class DjiDrone(private val context: Context) : DroneControl {
     @Volatile private var enableSticksWhenAirborne = false
     @Volatile private var landingRequested = false
     @Volatile private var lastSendError: String? = null
+
+    // Raw H.264 from the drone's camera, fanned out to GET /v1/video viewers.
+    private val primaryVideo = VideoHub()
+    private val transcodedVideo = VideoHub()
+    private val primaryListener = VideoFeeder.VideoDataListener { data, size -> primaryVideo.publish(data, size) }
+    private val transcodedListener = VideoFeeder.VideoDataListener { data, size -> transcodedVideo.publish(data, size) }
+    @Volatile private var transcodedAttached = false
 
     /** Latest state from DJI's simulator; null when it isn't running. */
     @Volatile private var simPose: SimulatorPose? = null
@@ -123,6 +135,7 @@ class DjiDrone(private val context: Context) : DroneControl {
         sdkStatus = "connected: ${a.model?.displayName}"
         a.battery?.setStateCallback { s -> batteryPct = s.chargeRemainingInPercent }
         a.flightController?.setStateCallback { s -> onState(a.flightController, s) }
+        attachPrimaryVideo()
         a.flightController?.simulator?.setStateCallback { st ->
             simPose = SimulatorPose(
                 northM = st.positionX,
@@ -141,6 +154,8 @@ class DjiDrone(private val context: Context) : DroneControl {
         enableSticksWhenAirborne = false
         lastStateAt = 0L
         simPose = null
+        primaryVideo.closeAll("drone disconnected")
+        transcodedVideo.closeAll("drone disconnected")
         sdkStatus = if (registered) "registered, waiting for the RC" else sdkStatus
     }
 
@@ -313,6 +328,43 @@ class DjiDrone(private val context: Context) : DroneControl {
         return mapOf("accepted" to true)
     }
 
+    // ---------------------------------------------------------------- video
+
+    /** The raw feed is always listened to once the drone connects; it costs nothing without viewers. */
+    private fun attachPrimaryVideo() {
+        runCatching {
+            val feed = VideoFeeder.getInstance()?.primaryVideoFeed ?: return
+            if (primaryListener !in feed.listeners) {
+                feed.addVideoDataListener(primaryListener)
+                events.add("video: listening to the primary feed")
+            }
+        }.onFailure { Log.e(TAG, "attach primary video", it) }
+    }
+
+    /** Transcoding uses phone CPU, so it only starts when someone asks for it. */
+    private fun attachTranscodedVideo() {
+        if (transcodedAttached) return
+        val feed = VideoFeeder.getInstance()?.provideTranscodedVideoFeed()
+            ?: throw BridgeError(503, "the SDK has no transcoded video feed")
+        feed.addVideoDataListener(transcodedListener)
+        transcodedAttached = true
+        events.add("video: transcoded feed started")
+    }
+
+    override fun openVideo(feed: VideoFeedKind): InputStream {
+        requireFlightController()
+        return when (feed) {
+            VideoFeedKind.PRIMARY -> {
+                attachPrimaryVideo()
+                primaryVideo.open()
+            }
+            VideoFeedKind.TRANSCODED -> {
+                attachTranscodedVideo()
+                transcodedVideo.open()
+            }
+        }.also { events.add("video: viewer connected (${feed.name.lowercase()})") }
+    }
+
     private fun simulatorActive(fc: FlightController?): Boolean =
         runCatching { fc?.simulator?.isSimulatorActive ?: false }.getOrDefault(false)
 
@@ -335,6 +387,8 @@ class DjiDrone(private val context: Context) : DroneControl {
                 "estopped" to gate.stopped,
                 "last_send_error" to lastSendError,
                 "simulator_active" to simulatorActive(fc),
+                "video" to primaryVideo.status(),
+                "video_transcoded" to if (transcodedAttached) transcodedVideo.status() else null,
                 "simulator" to simPose?.toMap(),
             ),
         )

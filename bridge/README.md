@@ -36,10 +36,46 @@ The laptop and phone need to be on the same Wi-Fi. The app keeps running in a fo
 | GET | `/v1/telemetry` | `battery_pct`, `height_m`, `link_ok`, plus debug fields (`flying`, `virtual_stick`, `estopped`, `simulator_active`, `simulator`, ...) |
 | POST | `/v1/simulator/start` | Starts DJI's simulator on the drone. Optional `latitude`, `longitude` (default: BCIT Burnaby). Ground only, motors off |
 | POST | `/v1/simulator/stop` | Stops the simulator. Refused while the simulated aircraft is flying |
+| GET | `/v1/video` | The drone camera as a live stream of raw H.264 (`video/h264`). Optional `?feed=transcoded`. At most 2 viewers |
 
 Successful calls return `{"ok": true, ...}`. Errors return `{"ok": false, "error": "..."}` with a status code: 400 bad body, 409 wrong state (not flying, landing, emergency stop latched), 503 SDK or drone not ready.
 
-Every call returns right away, since `mini2.py` uses a 0.5 s timeout. Takeoff and land run in the background; poll `/v1/telemetry` for `flying` and `virtual_stick`.
+Every call except `/v1/video` returns right away, since `mini2.py` uses a 0.5 s timeout. Takeoff and land run in the background; poll `/v1/telemetry` for `flying` and `virtual_stick`.
+
+## Video
+
+`GET /v1/video` streams the drone camera to the laptop as raw H.264, exactly as the drone sends it.
+The phone doesn't decode anything, which keeps its CPU free and adds the least delay. The laptop
+decodes it with FFmpeg or PyAV.
+
+- `?feed=primary` (default) is the drone's own stream. `?feed=transcoded` is the same video re-encoded
+  by the DJI SDK, for drones whose raw stream standard decoders can't read. Transcoding costs phone
+  CPU, so it only starts when someone asks for it. Which one the Mini 2 needs is still to be tested.
+- A viewer that falls more than about 64 chunks behind is disconnected instead of being allowed to
+  build up delay. Reconnect; decoding picks up again at the next keyframe.
+- Telemetry has a `video` object: `video_flowing` (video arrived in the last 2 s), `video_viewers`
+  and `video_kbps`.
+
+To check it from the laptop:
+
+```bash
+pip install av pillow
+python bridge/tools/check_video.py http://<phone-ip>:8765 --save frame.jpg
+```
+
+It reports the resolution and frame rate and saves one frame. If it connects but decodes nothing,
+run it again with `--feed transcoded`. With FFmpeg installed, `ffplay -fflags nobuffer -f h264
+http://<phone-ip>:8765/v1/video` shows the live picture.
+
+On the edge laptop, read frames the same way the script does:
+
+```python
+import av
+container = av.open("http://<phone-ip>:8765/v1/video", format="h264",
+                    options={"fflags": "nobuffer", "flags": "low_delay"})
+for frame in container.decode(video=0):
+    image = frame.to_ndarray(format="bgr24")  # OpenCV-style array for the detector
+```
 
 ## Safety behaviour
 
@@ -50,7 +86,7 @@ Every call returns right away, since `mini2.py` uses a 0.5 s timeout. Takeoff an
 
 ## Code layout
 
-- `core/` is plain Kotlin with no Android or DJI imports: limits, the velocity gate (timeout, latch, height guard) and the HTTP router. Unit tests cover it (`./gradlew test`, 27 tests).
+- `core/` is plain Kotlin with no Android or DJI imports: limits, the velocity gate (timeout, latch, height guard) and the HTTP router. Unit tests cover it (`./gradlew test`, 39 tests, including one that streams video through the real HTTP server).
 - `DjiDrone.kt` is everything that touches the SDK: registration, state callbacks, the 20 Hz stick loop, takeoff, landing and the stop.
 - `HttpBridgeServer.kt` adapts NanoHTTPD to the router. `BridgeService.kt` keeps it alive. `MainActivity.kt` is the status screen.
 

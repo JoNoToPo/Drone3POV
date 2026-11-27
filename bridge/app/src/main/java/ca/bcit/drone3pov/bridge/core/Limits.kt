@@ -29,4 +29,13 @@ object Limits {
     const val MAX_BODY_BYTES = 4096
 
     const val PORT = 8765
+
+    /** At most this many laptops can watch GET /v1/video at once (the edge laptop plus one viewer). */
+    const val MAX_VIDEO_VIEWERS = 2
+
+    /**
+     * Video chunks a viewer may have waiting. A viewer further behind than this is disconnected,
+     * so the follow controller never steers by stale frames.
+     */
+    const val MAX_VIDEO_QUEUE_CHUNKS = 64
 }
