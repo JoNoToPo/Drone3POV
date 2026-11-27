@@ -21,6 +21,15 @@ interface DroneControl {
     fun emergencyStop(): String
     fun velocity(v: Velocity)
     fun telemetry(): Telemetry
+
+    /**
+     * Starts DJI's simulator on the aircraft's flight controller. Only allowed on the ground with the
+     * motors off. While it runs, takeoff and velocity move a virtual aircraft; the real one stays put
+     * (but its motors may spin, so the propellers must be off).
+     */
+    fun startSimulator(start: SimulatorStart): Map<String, Any?>
+    /** Stops the simulator. Refused while the simulated aircraft is flying: land it first. */
+    fun stopSimulator(): Map<String, Any?>
 }
 
 data class Reply(val status: Int, val body: Map<String, Any?>)
@@ -45,6 +54,8 @@ class Router(private val drone: DroneControl) {
                 "/v1/takeoff" -> { drone.takeoff(); ok("accepted" to true) }
                 "/v1/land" -> { drone.land(); ok("accepted" to true) }
                 "/v1/velocity" -> { drone.velocity(Velocity.fromBody(body ?: emptyMap())); ok() }
+                "/v1/simulator/start" -> Reply(200, mapOf("ok" to true) + drone.startSimulator(SimulatorStart.fromBody(body)))
+                "/v1/simulator/stop" -> Reply(200, mapOf("ok" to true) + drone.stopSimulator())
                 "/v1/telemetry" -> {
                     val t = drone.telemetry()
                     Reply(
@@ -78,6 +89,8 @@ class Router(private val drone: DroneControl) {
             "/v1/emergency-stop" to "POST",
             "/v1/velocity" to "POST",
             "/v1/telemetry" to "GET",
+            "/v1/simulator/start" to "POST",
+            "/v1/simulator/stop" to "POST",
         )
     }
 }

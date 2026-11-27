@@ -117,6 +117,10 @@ class MainActivity : Activity() {
         val drone = Bridge.drone ?: return "Starting…"
         val t = drone.telemetry()
         return buildString {
+            if (t.extra["simulator_active"] == true) {
+                appendLine("*** SIMULATOR ON: the drone stays on the ground. Propellers must be off. ***")
+                appendLine()
+            }
             appendLine("BRIDGE_URL")
             Bridge.addresses().ifEmpty { listOf("(no network)") }.forEach { appendLine("  $it") }
             Bridge.serverError?.let { appendLine("HTTP server error: $it") }
