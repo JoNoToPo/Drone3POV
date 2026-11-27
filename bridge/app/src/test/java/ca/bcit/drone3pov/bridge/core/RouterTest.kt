@@ -18,6 +18,11 @@ private class FakeDrone : DroneControl {
     override fun land() = record("land")
     override fun emergencyStop(): String { record("emergency_stop"); return "motors_off" }
     override fun velocity(v: Velocity) { record("velocity"); lastVelocity = v }
+    var lastSimulatorStart: SimulatorStart? = null
+    override fun startSimulator(start: SimulatorStart): Map<String, Any?> {
+        record("simulator_start"); lastSimulatorStart = start; return mapOf("accepted" to true)
+    }
+    override fun stopSimulator(): Map<String, Any?> { record("simulator_stop"); return mapOf("accepted" to true) }
     override fun telemetry(): Telemetry {
         record("telemetry")
         return Telemetry(80, 1.2f, true, mapOf("flying" to true, "battery_pct" to -1))
@@ -88,5 +93,45 @@ class RouterTest {
         val r = router.handle("POST", "/v1/connect", null)
         assertEquals(true, r.body["ok"])
         assertEquals("DJI Mini 2", r.body["product"])
+    }
+
+    @Test
+    fun simulatorStartUsesDefaultsWithNoBody() {
+        val r = router.handle("POST", "/v1/simulator/start", null)
+        assertEquals(200, r.status)
+        assertEquals(true, r.body["ok"])
+        assertEquals(SimulatorStart(SimulatorStart.DEFAULT_LATITUDE, SimulatorStart.DEFAULT_LONGITUDE), drone.lastSimulatorStart)
+    }
+
+    @Test
+    fun simulatorStartTakesACoordinate() {
+        router.handle("POST", "/v1/simulator/start", mapOf("latitude" to 49.0, "longitude" to -123.5))
+        assertEquals(SimulatorStart(49.0, -123.5), drone.lastSimulatorStart)
+    }
+
+    @Test
+    fun simulatorStartRejectsBadCoordinates() {
+        assertEquals(400, router.handle("POST", "/v1/simulator/start", mapOf("latitude" to 91.0)).status)
+        assertEquals(400, router.handle("POST", "/v1/simulator/start", mapOf("longitude" to "west")).status)
+        assertEquals(emptyList<String>(), drone.calls)
+    }
+
+    @Test
+    fun simulatorStopRoutesToTheDrone() {
+        assertEquals(200, router.handle("POST", "/v1/simulator/stop", null).status)
+        assertEquals(listOf("simulator_stop"), drone.calls)
+    }
+
+    @Test
+    fun simulatorRoutesArePostOnly() {
+        assertEquals(405, router.handle("GET", "/v1/simulator/start", null).status)
+    }
+
+    @Test
+    fun simulatorErrorsKeepTheirStatus() {
+        drone.failWith = BridgeError(409, "start the simulator on the ground with the motors off")
+        val r = router.handle("POST", "/v1/simulator/start", null)
+        assertEquals(409, r.status)
+        assertEquals(false, r.body["ok"])
     }
 }

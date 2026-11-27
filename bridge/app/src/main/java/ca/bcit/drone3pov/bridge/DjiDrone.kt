@@ -5,6 +5,8 @@ import android.util.Log
 import ca.bcit.drone3pov.bridge.core.BridgeError
 import ca.bcit.drone3pov.bridge.core.DroneControl
 import ca.bcit.drone3pov.bridge.core.Limits
+import ca.bcit.drone3pov.bridge.core.SimulatorPose
+import ca.bcit.drone3pov.bridge.core.SimulatorStart
 import ca.bcit.drone3pov.bridge.core.Telemetry
 import ca.bcit.drone3pov.bridge.core.Velocity
 import ca.bcit.drone3pov.bridge.core.VelocityGate
@@ -12,11 +14,13 @@ import dji.common.error.DJIError
 import dji.common.error.DJISDKError
 import dji.common.flightcontroller.FlightControllerState
 import dji.common.flightcontroller.FlightMode
+import dji.common.flightcontroller.simulator.InitializationData
 import dji.common.flightcontroller.virtualstick.FlightControlData
 import dji.common.flightcontroller.virtualstick.FlightCoordinateSystem
 import dji.common.flightcontroller.virtualstick.RollPitchControlMode
 import dji.common.flightcontroller.virtualstick.VerticalControlMode
 import dji.common.flightcontroller.virtualstick.YawControlMode
+import dji.common.model.LocationCoordinate2D
 import dji.sdk.base.BaseComponent
 import dji.sdk.base.BaseProduct
 import dji.sdk.flightcontroller.FlightController
@@ -56,6 +60,9 @@ class DjiDrone(private val context: Context) : DroneControl {
     @Volatile private var enableSticksWhenAirborne = false
     @Volatile private var landingRequested = false
     @Volatile private var lastSendError: String? = null
+
+    /** Latest state from DJI's simulator; null when it isn't running. */
+    @Volatile private var simPose: SimulatorPose? = null
 
     /** Short log for the on-screen status. */
     val events = EventLog(40)
@@ -116,6 +123,16 @@ class DjiDrone(private val context: Context) : DroneControl {
         sdkStatus = "connected: ${a.model?.displayName}"
         a.battery?.setStateCallback { s -> batteryPct = s.chargeRemainingInPercent }
         a.flightController?.setStateCallback { s -> onState(a.flightController, s) }
+        a.flightController?.simulator?.setStateCallback { st ->
+            simPose = SimulatorPose(
+                northM = st.positionX,
+                eastM = st.positionY,
+                heightM = st.positionZ,
+                yawDeg = st.yaw,
+                flying = st.isFlying,
+                motorsOn = st.areMotorsOn(),
+            )
+        }
     }
 
     private fun detach() {
@@ -123,6 +140,7 @@ class DjiDrone(private val context: Context) : DroneControl {
         virtualStickOn = false
         enableSticksWhenAirborne = false
         lastStateAt = 0L
+        simPose = null
         sdkStatus = if (registered) "registered, waiting for the RC" else sdkStatus
     }
 
@@ -263,6 +281,41 @@ class DjiDrone(private val context: Context) : DroneControl {
         gate.submit(v)
     }
 
+    override fun startSimulator(start: SimulatorStart): Map<String, Any?> {
+        val fc = requireFlightController()
+        val sim = fc.simulator ?: throw BridgeError(503, "this aircraft has no simulator")
+        if (simulatorActive(fc)) return mapOf("simulator_active" to true, "note" to "already running")
+        if (flying || motorsOn) throw BridgeError(409, "start the simulator on the ground with the motors off")
+
+        gate.clear()
+        val data = InitializationData.createInstance(
+            LocationCoordinate2D(start.latitude, start.longitude),
+            SimulatorStart.UPDATE_HZ,
+            SimulatorStart.SATELLITES,
+        )
+        events.add("starting simulator (propellers must be off)")
+        sim.start(data) { err -> log("start simulator", err) }
+        // Starting is asynchronous; poll /v1/telemetry until simulator_active is true.
+        return mapOf("accepted" to true, "latitude" to start.latitude, "longitude" to start.longitude)
+    }
+
+    override fun stopSimulator(): Map<String, Any?> {
+        val fc = requireFlightController()
+        val sim = fc.simulator ?: throw BridgeError(503, "this aircraft has no simulator")
+        if (!simulatorActive(fc)) return mapOf("simulator_active" to false, "note" to "not running")
+        if (flying) throw BridgeError(409, "the simulated aircraft is flying; POST /v1/land first")
+
+        gate.clear()
+        sim.stop { err ->
+            log("stop simulator", err)
+            if (err == null) simPose = null
+        }
+        return mapOf("accepted" to true)
+    }
+
+    private fun simulatorActive(fc: FlightController?): Boolean =
+        runCatching { fc?.simulator?.isSimulatorActive ?: false }.getOrDefault(false)
+
     override fun telemetry(): Telemetry {
         val fc = aircraft?.flightController
         val fresh = System.currentTimeMillis() - lastStateAt <= Limits.STATE_STALE_MS
@@ -281,6 +334,8 @@ class DjiDrone(private val context: Context) : DroneControl {
                 "landing" to landingRequested,
                 "estopped" to gate.stopped,
                 "last_send_error" to lastSendError,
+                "simulator_active" to simulatorActive(fc),
+                "simulator" to simPose?.toMap(),
             ),
         )
     }
