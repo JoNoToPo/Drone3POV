@@ -32,6 +32,12 @@ interface DroneControl {
     fun stopSimulator(): Map<String, Any?>
 }
 
+/** Optional DJI RTMP publishing controls exposed by the Android bridge. */
+interface VideoStreamControl {
+    fun startVideoStream(url: String): Map<String, Any?>
+    fun stopVideoStream(): Map<String, Any?>
+}
+
 data class Reply(val status: Int, val body: Map<String, Any?>)
 
 /**
@@ -40,7 +46,7 @@ data class Reply(val status: Int, val body: Map<String, Any?>)
  * Every call returns quickly. api/app/mini2.py uses a 0.5 s timeout, so takeoff and
  * land are accepted and run in the background; poll /v1/telemetry to follow them.
  */
-class Router(private val drone: DroneControl) {
+class Router(private val drone: DroneControl, private val video: VideoStreamControl? = null) {
 
     fun handle(method: String, path: String, body: Map<String, Any?>?): Reply {
         val route = ROUTES[path] ?: return error(404, "no such endpoint: $path")
@@ -56,6 +62,15 @@ class Router(private val drone: DroneControl) {
                 "/v1/velocity" -> { drone.velocity(Velocity.fromBody(body ?: emptyMap())); ok() }
                 "/v1/simulator/start" -> Reply(200, mapOf("ok" to true) + drone.startSimulator(SimulatorStart.fromBody(body)))
                 "/v1/simulator/stop" -> Reply(200, mapOf("ok" to true) + drone.stopSimulator())
+                "/v1/video/start" -> {
+                    val url = body?.get("url") as? String ?: throw BridgeError(400, "url must be an RTMP URL")
+                    val control = video ?: throw BridgeError(503, "video streaming is unavailable")
+                    Reply(200, mapOf("ok" to true) + control.startVideoStream(url))
+                }
+                "/v1/video/stop" -> {
+                    val control = video ?: throw BridgeError(503, "video streaming is unavailable")
+                    Reply(200, mapOf("ok" to true) + control.stopVideoStream())
+                }
                 "/v1/telemetry" -> {
                     val t = drone.telemetry()
                     Reply(
@@ -91,6 +106,8 @@ class Router(private val drone: DroneControl) {
             "/v1/telemetry" to "GET",
             "/v1/simulator/start" to "POST",
             "/v1/simulator/stop" to "POST",
+            "/v1/video/start" to "POST",
+            "/v1/video/stop" to "POST",
         )
     }
 }

@@ -1,14 +1,16 @@
 """Webcam -> Hugging Face YOLOv10n -> BoT-SORT/ByteTrack -> MediaPipe Pose.
 
-This starter is observation-only: it displays and logs vision estimates but
-does not connect to or command the drone. Run from the repository root after
-installing both api/requirements.txt and edge/requirements.txt.
+By default this is a dry run that displays and logs estimates and proposed
+commands. Sending commands requires the explicit --control flag and a local
+Android bridge URL. Run from the repository root after installing the API and
+edge requirements.
 """
-# .edge-venv\Scripts\python.exe edge\run_webcam.py --focal-length-px 509 --shoulder-width-m 0.33
+# .edge-venv\Scripts\python.exe edge\run_vision_pipeline.py --focal-length-px 509 --shoulder-width-m 0.33
 from __future__ import annotations
 
 import argparse
 import math
+import os
 import sys
 import time
 from pathlib import Path
@@ -21,11 +23,14 @@ import numpy as np
 import supervision as sv
 from trackers import BoTSORTTracker, ByteTrackTracker
 
-# Allow `python edge/run_webcam.py` from the repository root to import `api`.
+# Allow `python edge/run_vision_pipeline.py` from the repository root to import `api`.
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from api.app.vision import PersonDetector
+from api.app import safety
+from edge.controller import BridgeClient, ControlWorker, ControllerConfig, FollowController
+from edge.safety_watchdog import SafetyWatchdog, WatchdogConfig
 
 
 DEFAULT_MODEL = ROOT / "api" / "models" / "yolov10n" / "onnx" / "model.onnx"
@@ -34,7 +39,10 @@ DEFAULT_POSE_MODEL = ROOT / "edge" / "models" / "pose_landmarker_lite.task"
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--camera", type=int, default=0, help="OpenCV camera index")
+    parser.add_argument("--source", default="0",
+                        help="Webcam index (0) or video URL, e.g. rtsp://127.0.0.1:8554/drone")
+    parser.add_argument("--camera", type=int, default=None,
+                        help="Deprecated webcam-only alias for --source (e.g. --camera 1)")
     parser.add_argument("--model", type=Path, default=DEFAULT_MODEL, help="Hugging Face YOLOv10n ONNX file")
     parser.add_argument("--pose-model", type=Path, default=DEFAULT_POSE_MODEL,
                         help="MediaPipe Pose Landmarker .task model")
@@ -51,6 +59,43 @@ def parse_args() -> argparse.Namespace:
                         help="ByteTrack (default, motion-only) or BoT-SORT with appearance re-identification")
     parser.add_argument("--reid-model", default="fastreid_mot17_sbs50",
                         help="Appearance model used by BoT-SORT (may download on first run)")
+    parser.add_argument("--follow-distance-m", type=float, default=safety.DEFAULT_DISTANCE_M)
+    parser.add_argument("--forward-kp", type=float, default=0.25, help="Forward speed per metre of position error")
+    parser.add_argument("--right-kp", type=float, default=0.25, help="Right speed per metre of position error")
+    parser.add_argument("--yaw-kp", type=float, default=0.7, help="Yaw rate per degree of camera bearing")
+    parser.add_argument("--max-speed-mps", type=float, default=0.3, help="Controller speed cap (hard limit is 1 m/s)")
+    parser.add_argument("--max-yaw-dps", type=float, default=12.0, help="Controller yaw-rate cap (bridge hard limit is 90 deg/s)")
+    parser.add_argument("--distance-deadband-m", type=float, default=0.2)
+    parser.add_argument("--lateral-deadband-m", type=float, default=0.15)
+    parser.add_argument("--bearing-deadband-deg", type=float, default=4.0)
+    parser.add_argument("--max-heading-error-deg", type=float, default=55.0,
+                        help="Hold unless person is facing within this angle of away from camera")
+    parser.add_argument("--filter-alpha", type=float, default=0.25,
+                        help="EMA smoothing factor; smaller is smoother but slower")
+    parser.add_argument("--stable-observations", type=int, default=5,
+                        help="Valid consecutive frames required before movement")
+    parser.add_argument("--camera-yaw-offset-deg", type=float, default=0.0,
+                        help="Camera optical axis offset relative to drone body forward")
+    parser.add_argument("--forward-sign", type=int, choices=(-1, 1), default=1)
+    parser.add_argument("--right-sign", type=int, choices=(-1, 1), default=1)
+    parser.add_argument("--yaw-sign", type=int, choices=(-1, 1), default=1)
+    parser.add_argument("--control", action="store_true",
+                        help="Send velocity commands; requires an already-airborne aircraft with virtual sticks on")
+    parser.add_argument("--bridge-url", default=os.environ.get("BRIDGE_URL"),
+                        help="Android bridge URL, e.g. http://192.168.1.42:8765 (or BRIDGE_URL env var)")
+    parser.add_argument("--control-hz", type=float, default=10.0, help="Command update rate (10–20 Hz)")
+    parser.add_argument("--observation-timeout-s", type=float, default=0.5,
+                        help="Send hover when the latest vision result is older than this")
+    parser.add_argument("--boundary-center-lat", type=float, default=None,
+                        help="GPS latitude for the center of the allowed circular flight area (required with --control)")
+    parser.add_argument("--boundary-center-lon", type=float, default=None,
+                        help="GPS longitude for the center of the allowed circular flight area (required with --control)")
+    parser.add_argument("--boundary-radius-m", type=float, default=None,
+                        help="Maximum radius from the boundary center (required with --control)")
+    parser.add_argument("--boundary-margin-m", type=float, default=2.0,
+                        help="Hover inside this distance from the boundary edge")
+    parser.add_argument("--gps-lost-land-s", type=float, default=2.0,
+                        help="Request landing after GPS remains invalid this long")
     parser.add_argument("--log-every", type=int, default=15, help="Print one observation every N frames")
     return parser.parse_args()
 
@@ -97,8 +142,63 @@ def main() -> None:
         raise SystemExit("--horizontal-fov-deg must be between 0 and 180")
     if args.focal_length_px is not None and args.focal_length_px <= 0:
         raise SystemExit("--focal-length-px must be positive")
+    if args.shoulder_width_m <= 0:
+        raise SystemExit("--shoulder-width-m must be positive")
     if args.lost_track_seconds <= 0:
         raise SystemExit("--lost-track-seconds must be positive")
+    if not 10 <= args.control_hz <= 20:
+        raise SystemExit("--control-hz must be between 10 and 20")
+    if args.observation_timeout_s <= 0:
+        raise SystemExit("--observation-timeout-s must be positive")
+    try:
+        controller_config = ControllerConfig(
+            follow_distance_m=args.follow_distance_m,
+            forward_kp=args.forward_kp,
+            right_kp=args.right_kp,
+            yaw_kp=args.yaw_kp,
+            max_speed_mps=args.max_speed_mps,
+            max_yaw_dps=args.max_yaw_dps,
+            distance_deadband_m=args.distance_deadband_m,
+            lateral_deadband_m=args.lateral_deadband_m,
+            bearing_deadband_deg=args.bearing_deadband_deg,
+            max_heading_error_deg=args.max_heading_error_deg,
+            filter_alpha=args.filter_alpha,
+            stable_observations=args.stable_observations,
+            camera_yaw_offset_deg=args.camera_yaw_offset_deg,
+            forward_sign=args.forward_sign,
+            right_sign=args.right_sign,
+            yaw_sign=args.yaw_sign,
+        )
+        controller_config.validate()
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    if args.control and not args.bridge_url:
+        raise SystemExit("--control requires --bridge-url or the BRIDGE_URL environment variable")
+    if args.control and args.focal_length_px is None:
+        raise SystemExit("--control requires calibrated --focal-length-px so distance is available")
+    watchdog = None
+    if args.control:
+        if None in (args.boundary_center_lat, args.boundary_center_lon, args.boundary_radius_m):
+            raise SystemExit("--control requires --boundary-center-lat, --boundary-center-lon, and --boundary-radius-m")
+        try:
+            watchdog_config = WatchdogConfig(
+                boundary_center_lat=args.boundary_center_lat,
+                boundary_center_lon=args.boundary_center_lon,
+                boundary_radius_m=args.boundary_radius_m,
+                boundary_margin_m=args.boundary_margin_m,
+                gps_lost_land_s=args.gps_lost_land_s,
+            )
+            watchdog_config.validate()
+            watchdog = SafetyWatchdog(watchdog_config)
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+    source: int | str
+    if args.camera is not None:
+        source = args.camera
+    else:
+        source = int(args.source) if args.source.isdecimal() else args.source
+    if args.control and (not isinstance(source, str) or not source.lower().startswith(("rtsp://", "rtsps://"))):
+        raise SystemExit("--control requires the aircraft RTSP feed; use --source rtsp://127.0.0.1:8554/drone")
     if not args.model.is_file():
         raise SystemExit(
             f"Model not found: {args.model}\n"
@@ -111,6 +211,7 @@ def main() -> None:
         )
 
     detector = PersonDetector(args.model, min_score=args.min_score)
+    controller = FollowController(controller_config)
     tracker_options = {
         "frame_rate": 30.0,
         "lost_track_buffer": round(args.lost_track_seconds * 30),
@@ -128,15 +229,38 @@ def main() -> None:
         min_tracking_confidence=0.5,
     )
     pose = mp_vision.PoseLandmarker.create_from_options(pose_options)
-    camera = cv2.VideoCapture(args.camera)
+    camera = (
+        cv2.VideoCapture(source, cv2.CAP_FFMPEG)
+        if isinstance(source, str)
+        else cv2.VideoCapture(source)
+    )
     if not camera.isOpened():
         pose.close()
-        raise SystemExit(f"Could not open camera index {args.camera}; try --camera 1")
+        raise SystemExit(f"Could not open video source {source!r}; check the camera index or stream URL")
+    camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+    bridge_client = None
+    control_worker = None
+    if args.control:
+        bridge_client = BridgeClient(args.bridge_url)
+        control_worker = ControlWorker(
+            bridge_client, controller, watchdog, rate_hz=args.control_hz,
+            observation_timeout_s=args.observation_timeout_s,
+        )
+        try:
+            control_worker.start()
+        except Exception as exc:
+            bridge_client.close()
+            camera.release()
+            pose.close()
+            raise SystemExit(f"Controller preflight failed: {exc}") from exc
 
     locked_subject_id: int | None = None
     frame_number = 0
     started = time.monotonic()
-    print("Observation-only webcam pipeline running. Press q in the video window to quit.")
+    run_mode = "CONTROL ENABLED" if args.control else "dry run; no drone commands sent"
+    print(f"Vision pipeline running ({run_mode}). Press q in the video window to quit.")
+    window_title = "Drone3POV edge perception (control enabled)" if args.control else "Drone3POV edge perception (dry run)"
     try:
         while True:
             ok, frame = camera.read()
@@ -256,12 +380,26 @@ def main() -> None:
                 cv2.putText(annotated, "waiting for a valid subject track",
                             (12, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 220, 255), 2)
 
+            controller.update(observation)
+            proposed = controller.compute(max_observation_age_s=args.observation_timeout_s)
+            observation["controller_reason"] = proposed.reason
+            observation["proposed_velocity"] = proposed.body()
+            cv2.putText(
+                annotated,
+                f"{proposed.reason}: fwd {proposed.forward_mps:+.2f} right {proposed.right_mps:+.2f} yaw {proposed.yaw_dps:+.1f}",
+                (12, 56), cv2.FONT_HERSHEY_SIMPLEX, 0.52,
+                (0, 0, 255) if args.control else (255, 255, 255), 2,
+            )
             if frame_number % max(args.log_every, 1) == 0:
                 print({**observation, "capture_monotonic_s": round(captured_at, 3)})
-            cv2.imshow("Drone3POV edge perception (observation only)", annotated)
+            cv2.imshow(window_title, annotated)
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
     finally:
+        if control_worker is not None:
+            control_worker.stop()
+        if bridge_client is not None:
+            bridge_client.close()
         camera.release()
         pose.close()
         cv2.destroyAllWindows()

@@ -24,6 +24,35 @@ $env:DRONE="mini2"; $env:BRIDGE_URL="http://192.168.1.42:8765"
 
 The laptop and phone need to be on the same Wi-Fi. The app keeps running in a foreground service with Wi-Fi and CPU locks, so the screen can turn off.
 
+## Forwarding live video to the edge laptop
+
+The bridge uses DJI MSDK's `LiveStreamManager` to publish the camera feed to a
+local RTMP server. Run MediaMTX on the edge laptop with RTMP and RTSP enabled
+(defaults: RTMP port 1935, RTSP port 8554). Allow inbound TCP port 1935 through
+the laptop firewall on the private Wi-Fi network. Find the laptop's LAN IPv4
+address with `ipconfig`.
+
+For Windows, download the standalone server from the
+[MediaMTX releases](https://github.com/bluenviron/mediamtx/releases) page, extract
+it, and run `mediamtx.exe` in PowerShell. Its default configuration enables RTMP
+publishing and RTSP reading.
+
+After the DJI app is connected to the aircraft, start publishing from PowerShell:
+
+```powershell
+$bridge = "http://192.168.1.42:8765"
+$laptop = "192.168.1.20"
+Invoke-RestMethod -Method Post -Uri "$bridge/v1/video/start" `
+  -ContentType "application/json" `
+  -Body (@{ url = "rtmp://${laptop}:1935/drone" } | ConvertTo-Json)
+```
+
+MediaMTX exposes the published path as RTSP on the same laptop:
+`rtsp://127.0.0.1:8554/drone`. Use that URL as the edge script's `--source`.
+Stop publishing with `Invoke-RestMethod -Method Post -Uri "$bridge/v1/video/stop"`.
+Keep this RTMP server on a trusted private network; the bridge HTTP API has no
+authentication.
+
 ## API
 
 | Method | Path | Body or response |
@@ -33,9 +62,11 @@ The laptop and phone need to be on the same Wi-Fi. The app keeps running in a fo
 | POST | `/v1/land` | Gives control back from virtual sticks and auto-lands, confirming the landing at 0.3 m |
 | POST | `/v1/emergency-stop` | See below. Response has `action` |
 | POST | `/v1/velocity` | `forward_mps`, `right_mps`, `up_mps`, `yaw_dps` (all required) |
-| GET | `/v1/telemetry` | `battery_pct`, `height_m`, `link_ok`, plus debug fields (`flying`, `virtual_stick`, `estopped`, `simulator_active`, `simulator`, ...) |
+| GET | `/v1/telemetry` | `battery_pct`, `height_m`, `link_ok`, plus `flying`, `virtual_stick`, `latitude`, `longitude`, `gps_signal_level`, `gps_valid`, and other debug fields |
 | POST | `/v1/simulator/start` | Starts DJI's simulator on the drone. Optional `latitude`, `longitude` (default: BCIT Burnaby). Ground only, motors off |
 | POST | `/v1/simulator/stop` | Stops the simulator. Refused while the simulated aircraft is flying |
+| POST | `/v1/video/start` | Starts DJI MSDK RTMP publishing. Body: `{"url":"rtmp://<laptop-ip>:1935/drone"}` |
+| POST | `/v1/video/stop` | Stops DJI MSDK RTMP publishing |
 
 Successful calls return `{"ok": true, ...}`. Errors return `{"ok": false, "error": "..."}` with a status code: 400 bad body, 409 wrong state (not flying, landing, emergency stop latched), 503 SDK or drone not ready.
 

@@ -8,6 +8,7 @@ import ca.bcit.drone3pov.bridge.core.Limits
 import ca.bcit.drone3pov.bridge.core.SimulatorPose
 import ca.bcit.drone3pov.bridge.core.SimulatorStart
 import ca.bcit.drone3pov.bridge.core.Telemetry
+import ca.bcit.drone3pov.bridge.core.VideoStreamControl
 import ca.bcit.drone3pov.bridge.core.Velocity
 import ca.bcit.drone3pov.bridge.core.VelocityGate
 import dji.common.error.DJIError
@@ -27,6 +28,7 @@ import dji.sdk.flightcontroller.FlightController
 import dji.sdk.products.Aircraft
 import dji.sdk.sdkmanager.DJISDKInitEvent
 import dji.sdk.sdkmanager.DJISDKManager
+import java.net.URI
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
@@ -39,7 +41,7 @@ private const val TAG = "Drone3POV.DjiDrone"
  * Threading: SDK callbacks arrive on SDK threads, HTTP requests on NanoHTTPD threads, and the
  * stick loop on its own executor. Shared state is @Volatile or lives in [VelocityGate].
  */
-class DjiDrone(private val context: Context) : DroneControl {
+class DjiDrone(private val context: Context) : DroneControl, VideoStreamControl {
 
     private val gate = VelocityGate()
     private val loop: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor()
@@ -51,6 +53,10 @@ class DjiDrone(private val context: Context) : DroneControl {
     // Cached state, updated by SDK callbacks.
     @Volatile private var batteryPct: Int? = null
     @Volatile private var heightM: Float? = null
+    @Volatile private var latitude: Double? = null
+    @Volatile private var longitude: Double? = null
+    @Volatile private var gpsSignalLevel: String? = null
+    @Volatile private var gpsValid = false
     @Volatile private var flying = false
     @Volatile private var motorsOn = false
     @Volatile private var flightMode: FlightMode? = null
@@ -113,6 +119,7 @@ class DjiDrone(private val context: Context) : DroneControl {
     }
 
     fun shutdown() {
+        runCatching { DJISDKManager.getInstance().liveStreamManager?.stopStream() }
         loop.shutdownNow()
         aircraft?.flightController?.setVirtualStickModeEnabled(false, null)
     }
@@ -136,17 +143,27 @@ class DjiDrone(private val context: Context) : DroneControl {
     }
 
     private fun detach() {
+        runCatching { DJISDKManager.getInstance().liveStreamManager?.stopStream() }
         aircraft = null
         virtualStickOn = false
         enableSticksWhenAirborne = false
         lastStateAt = 0L
+        latitude = null
+        longitude = null
+        gpsSignalLevel = null
+        gpsValid = false
         simPose = null
         sdkStatus = if (registered) "registered, waiting for the RC" else sdkStatus
     }
 
     private fun onState(fc: FlightController, s: FlightControllerState) {
         lastStateAt = System.currentTimeMillis()
-        heightM = s.aircraftLocation?.altitude
+        val location = s.aircraftLocation
+        heightM = location?.altitude
+        latitude = location?.latitude
+        longitude = location?.longitude
+        gpsSignalLevel = s.gpsSignalLevel?.name
+        gpsValid = location != null && gpsSignalLevel in setOf("LEVEL_3", "LEVEL_4", "LEVEL_5")
         flying = s.isFlying
         motorsOn = s.areMotorsOn()
         flightMode = s.flightMode
@@ -313,6 +330,37 @@ class DjiDrone(private val context: Context) : DroneControl {
         return mapOf("accepted" to true)
     }
 
+    override fun startVideoStream(url: String): Map<String, Any?> {
+        val uri = runCatching { URI(url) }.getOrElse {
+            throw BridgeError(400, "url must be a valid RTMP URL")
+        }
+        if (uri.scheme != "rtmp" || uri.host.isNullOrBlank()) {
+            throw BridgeError(400, "url must start with rtmp:// and include a server host")
+        }
+        if (!registered || aircraft == null) {
+            throw BridgeError(503, "connect the DJI SDK and aircraft before starting video")
+        }
+        val manager = DJISDKManager.getInstance().liveStreamManager
+            ?: throw BridgeError(503, "DJI live stream manager is unavailable")
+        manager.setLiveUrl(url)
+        manager.setAudioStreamingEnabled(false)
+        val result = manager.startStream()
+        if (result != 0) {
+            events.add("video stream start failed: DJI code $result")
+            throw BridgeError(503, "DJI RTMP stream failed to start (code $result)")
+        }
+        events.add("video stream publishing to $url")
+        return mapOf("accepted" to true, "streaming" to manager.isStreaming, "url" to url)
+    }
+
+    override fun stopVideoStream(): Map<String, Any?> {
+        val manager = DJISDKManager.getInstance().liveStreamManager
+            ?: throw BridgeError(503, "DJI live stream manager is unavailable")
+        if (manager.isStreaming) manager.stopStream()
+        events.add("video stream stopped")
+        return mapOf("accepted" to true, "streaming" to false)
+    }
+
     private fun simulatorActive(fc: FlightController?): Boolean =
         runCatching { fc?.simulator?.isSimulatorActive ?: false }.getOrDefault(false)
 
@@ -336,6 +384,10 @@ class DjiDrone(private val context: Context) : DroneControl {
                 "last_send_error" to lastSendError,
                 "simulator_active" to simulatorActive(fc),
                 "simulator" to simPose?.toMap(),
+                "latitude" to latitude,
+                "longitude" to longitude,
+                "gps_signal_level" to gpsSignalLevel,
+                "gps_valid" to gpsValid,
             ),
         )
     }
