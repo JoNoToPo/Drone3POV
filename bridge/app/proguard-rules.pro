@@ -1,0 +1,11 @@
+# Only used if minify is turned on. MSDK v4 needs its classes left alone.
+-keepattributes Exceptions,InnerClasses,*Annotation*,Signature,EnclosingMethod
+-keep class dji.** { *; }
+-keep class com.dji.** { *; }
+-keep class com.secneo.** { *; }
+-keep class org.bouncycastle.** { *; }
+-keep class fi.iki.elonen.** { *; }
+-dontwarn dji.**
+-dontwarn com.dji.**
+-dontwarn com.secneo.**
+-dontwarn org.bouncycastle.**
