@@ -97,25 +97,52 @@ class SafetyWatchdog:
         if observation.distance_m is not None and observation.distance_m < safety.MIN_DISTANCE_M:
             return WatchdogDecision("land", "subject_too_close")
 
-        gps_valid = bool(telemetry.get("gps_valid"))
-        lat = telemetry.get("latitude")
-        lon = telemetry.get("longitude")
-        if (
-            not gps_valid
-            or not isinstance(lat, (int, float))
-            or not isinstance(lon, (int, float))
-            or not math.isfinite(lat)
-            or not math.isfinite(lon)
-        ):
+        position = self._gps_position(telemetry)
+        if position is None:
             if self._gps_lost_since is None:
                 self._gps_lost_since = now
             if now - self._gps_lost_since >= self.config.gps_lost_land_s:
                 return WatchdogDecision("land", "gps_position_unavailable")
             return WatchdogDecision("hover", "gps_position_unavailable")
         self._gps_lost_since = None
+        return self._boundary_decision(*position)
 
+    def preflight(self, telemetry: dict) -> WatchdogDecision:
+        """Start-up check: only what can be known before the first video frame.
+
+        Vision isn't checked here, because no frame has been processed when the controller
+        starts. That's safe: once running, evaluate() hovers until the locked subject has a
+        fresh, valid observation.
+        """
+        if not telemetry.get("link_ok"):
+            return WatchdogDecision("hover", "bridge_or_aircraft_link_lost")
+        if not telemetry.get("flying") or not telemetry.get("virtual_stick"):
+            return WatchdogDecision("hover", "flight_control_unavailable")
+        if int(telemetry.get("battery_pct", 100)) <= 15:
+            return WatchdogDecision("land", "low_battery")
+        position = self._gps_position(telemetry)
+        if position is None:
+            return WatchdogDecision("hover", "gps_position_unavailable")
+        return self._boundary_decision(*position)
+
+    @staticmethod
+    def _gps_position(telemetry: dict) -> tuple[float, float] | None:
+        """(lat, lon) when the bridge reports a valid, finite GPS fix; otherwise None."""
+        lat = telemetry.get("latitude")
+        lon = telemetry.get("longitude")
+        if (
+            not bool(telemetry.get("gps_valid"))
+            or not isinstance(lat, (int, float))
+            or not isinstance(lon, (int, float))
+            or not math.isfinite(lat)
+            or not math.isfinite(lon)
+        ):
+            return None
+        return float(lat), float(lon)
+
+    def _boundary_decision(self, lat: float, lon: float) -> WatchdogDecision:
         boundary_distance = distance_from_boundary_center_m(
-            float(lat), float(lon), self.config.boundary_center_lat, self.config.boundary_center_lon
+            lat, lon, self.config.boundary_center_lat, self.config.boundary_center_lon
         )
         if boundary_distance >= self.config.boundary_radius_m:
             return WatchdogDecision("land", "flight_boundary_exceeded", boundary_distance)

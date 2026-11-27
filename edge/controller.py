@@ -251,10 +251,10 @@ class ControlWorker:
             raise RuntimeError("bridge reports link_ok=false")
         if not status.get("flying") or not status.get("virtual_stick"):
             raise RuntimeError("aircraft must already be flying with virtual sticks enabled; edge will not take off")
-        decision = self.watchdog.evaluate(
-            self.controller.snapshot(), status, time.monotonic(),
-            telemetry_age_s=0.0, observation_timeout_s=self.observation_timeout_s,
-        )
+        # Aircraft-only check: no video frame has been processed yet at this point, so the
+        # vision checks in evaluate() would always report a stale observation. The control
+        # loop hovers until the subject has a fresh, valid observation.
+        decision = self.watchdog.preflight(status)
         if decision.action != "allow":
             raise RuntimeError(f"safety preflight blocked controller: {decision.reason}")
         with self._telemetry_lock:
