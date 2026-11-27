@@ -1,0 +1,6 @@
+# Install the repo's API requirements first for ONNX Runtime, NumPy, Pillow,
+# and Hugging Face Hub. These are the edge-only runtime dependencies.
+opencv-python
+supervision
+trackers
+mediapipe

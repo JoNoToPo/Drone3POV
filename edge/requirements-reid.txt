@@ -1,0 +1,2 @@
+# Optional appearance-based reacquisition via BoT-SORT.
+trackers[reid]

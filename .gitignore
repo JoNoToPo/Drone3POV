@@ -1,4 +1,5 @@
 .venv/
+.edge-venv/
 __pycache__/
 .pytest_cache/
 
@@ -13,3 +14,4 @@ bridge/**/*.keystore
 # API runtime files
 api/*.db
 api/models/
+edge/models/
