@@ -2,6 +2,8 @@
 
 The Drone3POV REST API (FastAPI). Docs are served at `/doc/` and the OpenAPI spec at `/api/v1/openapi.json`.
 
+Live at https://drone3pov-production.up.railway.app (docs: https://drone3pov-production.up.railway.app/doc/), serving the client at https://drone3pov.netlify.app.
+
 To test with Swagger (for example in a lab), see [`docs/swagger-lab.md`](../docs/swagger-lab.md).
 
 ## Endpoints (v1)
@@ -72,7 +74,7 @@ The demo accounts `john@john.com` / `123` (user) and `admin@admin.com` / `111` (
 4. In the API service's **Variables**, set:
    - `DATABASE_URL` = `${{Postgres.DATABASE_URL}}`
    - `JWT_SECRET` = a long random value (`python -c "import secrets; print(secrets.token_urlsafe(48))"`)
-   - `CLIENT_ORIGINS` = the client's URL, e.g. `https://your-client.vercel.app`
+   - `CLIENT_ORIGINS` = the client's URL, `https://drone3pov.netlify.app` (no trailing slash)
    - `REQUIRE_PRODUCTION_SETTINGS` = `1` (the API then refuses to start with the dev secret or SQLite)
 5. **Settings → Networking → Generate Domain** for a public URL.
 

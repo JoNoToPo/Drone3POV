@@ -2,6 +2,8 @@
 
 The client for Milestone 1: landing page, register, login, user page and admin page. Plain HTML, CSS and JavaScript, no build step.
 
+Live at https://drone3pov.netlify.app (Netlify). It calls the API at https://drone3pov-production.up.railway.app, which allows this origin through `CLIENT_ORIGINS` on Railway.
+
 | Page | What it does |
 | --- | --- |
 | `index.html` | Landing page with the project title |

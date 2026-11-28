@@ -4,6 +4,18 @@ A follow-me drone service: an API call starts a session, and a DJI Mini 2 follow
 
 Task board: [Trello](https://trello.com/b/CMNrwg89/drone3pov)
 
+## Live
+
+| What | URL | Hosted on |
+| --- | --- | --- |
+| Client (login, user and admin pages) | https://drone3pov.netlify.app | Netlify |
+| API | https://drone3pov-production.up.railway.app | Railway, with Postgres |
+| API docs (Swagger) | https://drone3pov-production.up.railway.app/doc/ | Railway |
+
+Demo accounts: `john@john.com` / `123` (user) and `admin@admin.com` / `111` (admin).
+
+## Folders
+
 | Folder | What it is | Language |
 | --- | --- | --- |
 | [`api/`](api/) | Cloud API: follow sessions, safety limits, drone adapters | Python, FastAPI |
